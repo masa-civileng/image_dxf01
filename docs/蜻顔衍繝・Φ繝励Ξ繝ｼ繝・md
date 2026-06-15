@@ -1,0 +1,34 @@
+# X 告知テンプレート(下書き)
+
+そのまま使わず、ご自身の言葉に調整してください。**動画/スクショ必須**です。
+告知するのは streamlit.app のURLのみ。GitHub URLは出さないでください。
+
+## 日本語(スレッド)
+
+【1投稿目 — フック+動画】
+> コンクリート点検用のWebアプリを2つ公開しました📷→📐
+> ・分割写真をゆがみなく1枚に結合&実寸補正
+> ・ひび割れマーキング写真を実寸DXF(CAD)に自動変換
+> インストール不要、ブラウザで試せます。感想いただけると嬉しいです🙏
+> [アプリURL] #土木 #インフラ点検 #コンクリート
+
+【2投稿目 — 中身】
+> 真上から撮った写真の四隅をクリックするだけで実寸の長方形に補正。
+> ひび割れ図は色ごとにレイヤ分けしてDXF出力、写真を下絵にしたDXFも作れます。
+
+【3投稿目 — お願い】
+> 現場で使えるか・精度・ほしい機能など、どんな声でも歓迎です👇
+> [フォームURL]
+
+## English
+
+> Two free browser tools for concrete inspection 📷→📐
+> • Stitch split photos into one & rectify to true scale
+> • Convert crack-marking photos into a true-scale DXF (CAD)
+> No install — runs in your browser. Feedback welcome 🙏
+> [app URL] #civilengineering #infrastructure #computervision
+
+## コツ
+- 1投稿目に必ず動画かGIF。文字だけは伸びません。
+- ハッシュタグは3〜4個。土木・点検・CV系を混ぜる。
+- 最初の数時間の反応が重要。リプには早めに返信。
