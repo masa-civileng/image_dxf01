@@ -19,7 +19,7 @@ import streamlit as st
 from PIL import Image, ImageDraw
 from streamlit_image_coordinates import streamlit_image_coordinates
 
-st.set_page_config(page_title="結合＆ゆがみ補正", layout="wide")
+st.set_page_config(page_title="画像結合＆ゆがみ補正", layout="wide")
 Image.MAX_IMAGE_PIXELS = None  # 高解像度の結合結果に対応
 
 
@@ -475,7 +475,7 @@ def render_correct_tab():
 # ============================================================
 # メイン：タブ構成
 # ============================================================
-st.title("🧱 Slab App｜画像結合 ＆ ゆがみ補正")
+st.title("🧱 画像結合 ＆ ゆがみ補正")
 st.caption("手順1で分割画像を1枚に結合し、手順2でひし形・台形を長方形に補正します。")
 
 tab1, tab2 = st.tabs(["① 手順1：画像ファイル結合", "② 手順2：ゆがみ補正"])
