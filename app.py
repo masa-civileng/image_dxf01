@@ -80,19 +80,10 @@ if choice.startswith("🧱"):
 else:
     run_subapp("crack2dxf_app.py")
 
+# 著作権表記(共通フッター)
 # ============================================================
-# フィードバック導線 & 著作権表記(共通フッター)
-# ============================================================
-FEEDBACK_URL = "https://forms.gle/REPLACE_WITH_YOUR_FORM"   # ← Googleフォームに置換
-X_HANDLE = "@your_account"                                  # ← Xアカウントに置換
-COPYRIGHT = "© 2026 [あなたの氏名/組織名]"                    # ← 氏名/組織名に置換
+COPYRIGHT = "© 2026 [あなたの氏名/組織名]"
 
 st.divider()
-_c1, _c2 = st.columns([3, 2])
-with _c1:
-    st.markdown(
-        f"💬 **ご意見・ご感想をお寄せください** — "
-        f"[かんたんアンケート（1分）]({FEEDBACK_URL}) ／ X: {X_HANDLE}")
-with _c2:
-    st.caption(f"{COPYRIGHT}　無断転載・複製を禁じます。"
-               "本ツールは点検補助用です。最終判断は利用者の責任で行ってください。")
+st.caption(f"{COPYRIGHT}　無断転載・複製を禁じます。"
+           "本ツールは点検補助用です。最終判断は利用者の責任で行ってください。")
