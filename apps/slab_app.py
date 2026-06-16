@@ -19,7 +19,7 @@ import streamlit as st
 from PIL import Image, ImageDraw
 from streamlit_image_coordinates import streamlit_image_coordinates
 
-st.set_page_config(page_title="Slab App｜結合＆ゆがみ補正", layout="wide")
+st.set_page_config(page_title="結合＆ゆがみ補正", layout="wide")
 Image.MAX_IMAGE_PIXELS = None  # 高解像度の結合結果に対応
 
 
