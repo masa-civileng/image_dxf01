@@ -8,8 +8,11 @@
     streamlit run crack2dxf_app.py
 """
 import io
+import os
+import json
 import tempfile
 import zipfile
+from datetime import datetime
 
 import cv2
 import numpy as np
@@ -18,6 +21,61 @@ from skimage.morphology import skeletonize
 import ezdxf
 
 st.set_page_config(page_title="ひび割れ写真→DXF変換 v2", layout="wide")
+
+# ----------------------------------------------------------------------
+# アクセスカウンター（訪問回数を数える）
+#   - 累計アクセス数と日別アクセス数をファイルに記録する
+#   - 数値は管理者だけが見られる（URL末尾に ?admin=1 を付けたときのみ表示）
+#   - 1セッション（1回の訪問）につき1回だけカウント
+# ----------------------------------------------------------------------
+COUNTER_FILE = os.path.join(tempfile.gettempdir(), "crack2dxf_access_count.json")
+
+
+def _load_counts():
+    try:
+        with open(COUNTER_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"total": 0, "daily": {}}
+
+
+def _save_counts(data):
+    try:
+        with open(COUNTER_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def count_visit_once():
+    """このセッションで初回のときだけ+1する"""
+    if st.session_state.get("_counted"):
+        return _load_counts()
+    st.session_state["_counted"] = True
+    data = _load_counts()
+    data["total"] = data.get("total", 0) + 1
+    today = datetime.now().strftime("%Y-%m-%d")
+    data["daily"][today] = data["daily"].get(today, 0) + 1
+    _save_counts(data)
+    return data
+
+
+_counts = count_visit_once()
+
+# 管理者だけに表示（URLに ?admin=1 を付けてアクセスしたとき）
+try:
+    _is_admin = st.query_params.get("admin") == "1"
+except Exception:
+    _is_admin = st.experimental_get_query_params().get("admin", ["0"])[0] == "1"
+
+if _is_admin:
+    with st.sidebar:
+        st.success(f"📊 累計アクセス: {_counts.get('total', 0)} 回")
+        _daily = _counts.get("daily", {})
+        if _daily:
+            st.caption("日別アクセス数（最近7日）")
+            for _d in sorted(_daily.keys(), reverse=True)[:7]:
+                st.caption(f"　{_d}: {_daily[_d]} 回")
 
 # ----------------------------------------------------------------------
 # 画像処理関数
