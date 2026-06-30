@@ -9,73 +9,17 @@
 """
 import io
 import os
-import json
 import tempfile
 import zipfile
-from datetime import datetime
 
 import cv2
 import numpy as np
 import streamlit as st
 from skimage.morphology import skeletonize
 import ezdxf
+from ezdxf.addons import odafc
 
 st.set_page_config(page_title="ひび割れ写真→DXF変換 v2", layout="wide")
-
-# ----------------------------------------------------------------------
-# アクセスカウンター（訪問回数を数える）
-#   - 累計アクセス数と日別アクセス数をファイルに記録する
-#   - 数値は管理者だけが見られる（URL末尾に ?admin=1 を付けたときのみ表示）
-#   - 1セッション（1回の訪問）につき1回だけカウント
-# ----------------------------------------------------------------------
-COUNTER_FILE = os.path.join(tempfile.gettempdir(), "crack2dxf_access_count.json")
-
-
-def _load_counts():
-    try:
-        with open(COUNTER_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {"total": 0, "daily": {}}
-
-
-def _save_counts(data):
-    try:
-        with open(COUNTER_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
-    except Exception:
-        pass
-
-
-def count_visit_once():
-    """このセッションで初回のときだけ+1する"""
-    if st.session_state.get("_counted"):
-        return _load_counts()
-    st.session_state["_counted"] = True
-    data = _load_counts()
-    data["total"] = data.get("total", 0) + 1
-    today = datetime.now().strftime("%Y-%m-%d")
-    data["daily"][today] = data["daily"].get(today, 0) + 1
-    _save_counts(data)
-    return data
-
-
-_counts = count_visit_once()
-
-# 管理者だけに表示（URLに ?admin=1 を付けてアクセスしたとき）
-try:
-    _is_admin = st.query_params.get("admin") == "1"
-except Exception:
-    _is_admin = st.experimental_get_query_params().get("admin", ["0"])[0] == "1"
-
-if _is_admin:
-    with st.sidebar:
-        st.success(f"📊 累計アクセス: {_counts.get('total', 0)} 回")
-        _daily = _counts.get("daily", {})
-        if _daily:
-            st.caption("日別アクセス数（最近7日）")
-            for _d in sorted(_daily.keys(), reverse=True)[:7]:
-                st.caption(f"　{_d}: {_daily[_d]} 回")
 
 # ----------------------------------------------------------------------
 # 画像処理関数
@@ -216,6 +160,66 @@ def extract_chalk(img, exclude_mask, v_min, th_thresh, s_max,
     return chalk, rejected
 
 
+def extract_color_chalk(img, exclude_mask, hue_ranges, s_min, v_min,
+                        w_min, w_max, max_cv, min_span):
+    """カラーチョーク抽出 (ピンク・青・赤・黄など 有彩色チョーク)
+    白チョークと同じく『線幅が一定』という特徴で線らしさを判定し、
+    斑状・不規則な有彩色領域 (汚れ・塗膜剥離など) を棄却する。
+    hue_ranges: [(h_lo, h_hi), ...] 色相の許容帯 (赤など0跨ぎは2帯で渡す)
+    戻り値: (chalk_mask, rejected_mask)
+    """
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    h, w = hsv.shape[:2]
+    cand = np.zeros((h, w), np.uint8)
+    for h_lo, h_hi in hue_ranges:
+        cand |= cv2.inRange(hsv, np.array([h_lo, s_min, v_min]),
+                            np.array([h_hi, 255, 255]))
+
+    margin = max(10, int(min(h, w) * 0.015))
+    border = np.zeros_like(cand)
+    border[margin:h - margin, margin:w - margin] = 255
+    cand &= border
+    cand[exclude_mask > 0] = 0
+    cand = cv2.morphologyEx(cand, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(cand, 8)
+    chalk = np.zeros_like(cand)
+    rejected = np.zeros_like(cand)
+    for i in range(1, n):
+        area = stats[i, cv2.CC_STAT_AREA]
+        if area < 80:
+            continue
+        comp = (lab == i).astype(np.uint8)
+        sk = skeletonize(comp > 0)
+        L = sk.sum()
+        span = max(stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT])
+        if L < 40 or span < min_span:
+            rejected[lab == i] = 255
+            continue
+        dist = cv2.distanceTransform(comp, cv2.DIST_L2, 3)
+        widths = 2.0 * dist[sk]
+        mean_w = float(widths.mean())
+        cv_w = float(widths.std()) / max(mean_w, 1e-6)
+        if (w_min <= mean_w <= w_max) and cv_w <= max_cv:
+            chalk[lab == i] = 255          # 線幅一定 → 色チョーク線
+        else:
+            rejected[lab == i] = 255        # 幅不規則 → 汚れ等
+    return chalk, rejected
+
+
+# 色チョークの既定色相帯 (OpenCV HSV: H=0-179)
+COLOR_CHALK_DEFS = {
+    "pink":   {"jp": "ピンク", "draw": (203, 192, 255), "dxf": 6,
+               "hue": [(150, 175)], "s_min": 40, "v_min": 120},
+    "blue":   {"jp": "青",     "draw": (255, 100, 0),   "dxf": 5,
+               "hue": [(95, 130)],  "s_min": 50, "v_min": 80},
+    "red":    {"jp": "赤",     "draw": (0, 0, 255),     "dxf": 1,
+               "hue": [(0, 10), (170, 180)], "s_min": 60, "v_min": 80},
+    "yellow": {"jp": "黄",     "draw": (0, 255, 255),   "dxf": 2,
+               "hue": [(20, 35)],  "s_min": 50, "v_min": 120},
+}
+
+
 def trace_skeleton(mask):
     """スケルトン画像 → 画素パス列 (分岐点・端点で分割)"""
     sk = skeletonize(mask > 0)
@@ -319,7 +323,28 @@ def build_dxf(layer_masks, img_shape, real_w, real_h, eps, min_len_mm,
         doc.saveas(f.name)
         with open(f.name, "rb") as g:
             data = g.read()
-    return data, stats, px_polys
+    return data, doc, stats, px_polys
+
+
+def export_dwg_bytes(doc, oda_path=""):
+    """ezdxfドキュメント → DWGバイト列 (ODA File Converter が必要)
+    戻り値: (dwg_bytes | None, エラーメッセージ | None)
+    """
+    if oda_path:
+        ezdxf.options.set("odafc-addon", "win_exec_path", oda_path)
+    try:
+        if not odafc.is_installed():
+            return None, (
+                "ODA File Converter が見つかりません。"
+                "https://www.opendesign.com/guestfiles/oda_file_converter "
+                "から無償版をインストールするか、サイドバーでexeのパスを指定してください。")
+        with tempfile.TemporaryDirectory() as td:
+            dwg_path = os.path.join(td, "crack_map.dwg")
+            odafc.export_dwg(doc, dwg_path, version="R2018", replace=True)
+            with open(dwg_path, "rb") as f:
+                return f.read(), None
+    except Exception as e:
+        return None, f"DWG変換に失敗しました: {e}"
 
 
 def make_cad_zip(cad_bytes, cad_name, photo_png_bytes):
@@ -352,6 +377,13 @@ with st.sidebar:
     use_blue = st.checkbox("🔵 青マジック", False)
     use_black = st.checkbox("⚫ 黒マジック", True)
     use_chalk = st.checkbox("⚪ 白チョーク", False)
+    st.markdown("**🖍 カラーチョーク**")
+    use_cc = {
+        "pink":   st.checkbox("🩷 ピンクチョーク", False),
+        "blue":   st.checkbox("🔵 青チョーク", False),
+        "red":    st.checkbox("🔴 赤チョーク", False),
+        "yellow": st.checkbox("🟡 黄チョーク", False),
+    }
 
     if use_red:
         with st.expander("🔴 赤の設定"):
@@ -394,10 +426,46 @@ with st.sidebar:
             c_span = st.slider("最小スパン (px)", 20, 150, 50, key="csp")
             show_rejected = st.checkbox("棄却領域(エフロ等)を表示", True, key="crj")
 
+    cc_params = {}
+    for ck, on in use_cc.items():
+        if not on:
+            continue
+        d = COLOR_CHALK_DEFS[ck]
+        with st.expander(f"🖍 {d['jp']}チョークの設定"):
+            s_min = st.slider("彩度しきい値", 10, 150, d["s_min"], key=f"cc_s_{ck}")
+            v_min = st.slider("明度しきい値", 30, 200, d["v_min"], key=f"cc_v_{ck}")
+            wmin, wmax = st.slider("線幅範囲 (px)", 1.0, 20.0, (2.0, 12.0),
+                                   0.5, key=f"cc_w_{ck}")
+            cvmax = st.slider("線幅の変動係数 上限", 0.2, 0.8, 0.45, 0.05,
+                              key=f"cc_cv_{ck}",
+                              help="小さいほど『幅が一定の線』だけをチョークと判定")
+            span = st.slider("最小スパン (px)", 20, 150, 50, key=f"cc_sp_{ck}")
+            # 赤チョークは色相0跨ぎ。微調整スライダは中心幅で提供
+            hue_ranges = d["hue"]
+            if ck != "red":
+                hc = int((d["hue"][0][0] + d["hue"][0][1]) / 2)
+                hw = st.slider("色相中心 ±幅", 5, 25,
+                               int((d["hue"][0][1] - d["hue"][0][0]) / 2),
+                               key=f"cc_h_{ck}")
+                hcc = st.slider("色相中心", max(0, hc - 30), min(179, hc + 30),
+                                hc, key=f"cc_hc_{ck}")
+                hue_ranges = [(max(0, hcc - hw), min(179, hcc + hw))]
+            cc_params[ck] = dict(hue=hue_ranges, s_min=s_min, v_min=v_min,
+                                 wmin=wmin, wmax=wmax, cvmax=cvmax, span=span)
+
     st.subheader("出力設定")
     embed_photo = st.checkbox("📷 写真を下絵として埋め込む", True,
                               help="CADファイルと同フォルダの crack_photo.png を"
                                    "外部参照します(ZIPで一括ダウンロード)")
+    make_dwg = st.checkbox("📐 DWGファイルも作成", False,
+                           help="無償の ODA File Converter のインストールが必要です")
+    oda_path = ""
+    if make_dwg:
+        oda_path = st.text_input(
+            "ODA File Converter のパス (空欄=自動検出)",
+            value="",
+            placeholder=r"C:\Program Files\ODA\ODAFileConverter\ODAFileConverter.exe")
+
     st.subheader("ベクトル化")
     eps = st.slider("簡略化 (Douglas-Peucker, px)", 0.5, 5.0, 1.2, 0.1)
     min_len = st.slider("最小線長 (mm)", 0, 100, 12)
@@ -443,6 +511,16 @@ with st.spinner("抽出・ベクトル化中..."):
                                        c_wmin, c_wmax, c_cv, c_span))
                         if use_chalk else (None, None))
 
+    # カラーチョーク抽出
+    cc_masks = {}
+    cc_rejs = {}
+    for ck, p in cc_params.items():
+        m, rej = extract_color_chalk(img, chroma_total, p["hue"], p["s_min"],
+                                     p["v_min"], p["wmin"], p["wmax"],
+                                     p["cvmax"], p["span"])
+        cc_masks[ck] = m
+        cc_rejs[ck] = rej
+
     layer_masks = {
         "CRACK_RED": (red, 1),
         "CRACK_GREEN": (green, 3),
@@ -450,16 +528,24 @@ with st.spinner("抽出・ベクトル化中..."):
         "CRACK_BLACK": (black, 7),
         "CHALK_WHITE": (chalk, 9),
     }
-    dxf_bytes, stats, px_polys = build_dxf(
+    for ck in cc_params:
+        d = COLOR_CHALK_DEFS[ck]
+        layer_masks[f"CHALK_{ck.upper()}"] = (cc_masks[ck], d["dxf"])
+    dxf_bytes, dxf_doc, stats, px_polys = build_dxf(
         layer_masks, img.shape, real_w, real_h, eps, min_len,
         embed_photo=embed_photo)
     photo_png = cv2.imencode(".png", img)[1].tobytes() if embed_photo else None
+    dwg_bytes, dwg_err = (export_dwg_bytes(dxf_doc, oda_path)
+                          if make_dwg else (None, None))
 
 # ---- 結果表示 ----
 active = [(name, jp) for name, jp, used in [
     ("CRACK_RED", "赤", use_red), ("CRACK_GREEN", "緑", use_green),
     ("CRACK_BLUE", "青", use_blue), ("CRACK_BLACK", "黒", use_black),
     ("CHALK_WHITE", "白チョーク", use_chalk)] if used]
+for ck in cc_params:
+    d = COLOR_CHALK_DEFS[ck]
+    active.append((f"CHALK_{ck.upper()}", f"{d['jp']}チョーク"))
 
 cols = st.columns(len(active))
 for c, (name, jp) in zip(cols, active):
@@ -477,18 +563,33 @@ else:
         "⬇️ DXF", dxf_bytes, file_name="crack_map.dxf",
         mime="application/dxf", use_container_width=True)
 
+if make_dwg:
+    if dwg_bytes is not None:
+        if embed_photo:
+            dl_cols[1].download_button(
+                "⬇️ DWG + 写真 (ZIP)",
+                make_cad_zip(dwg_bytes, "crack_map.dwg", photo_png),
+                file_name="crack_map_dwg.zip", mime="application/zip",
+                use_container_width=True)
+        else:
+            dl_cols[1].download_button(
+                "⬇️ DWG", dwg_bytes, file_name="crack_map.dwg",
+                mime="application/octet-stream", use_container_width=True)
+    else:
+        st.error(dwg_err)
+
 if embed_photo:
     st.info("📷 写真は crack_photo.png として外部参照されます。"
             "ZIPを展開し、CADファイルと crack_photo.png を**同じフォルダ**に"
-            "置いたまま開いてください(別フォルダに移すと写真が表示されません)。"
-            "DWGが必要な場合は、AutoCADでDXFを開いて"
-            "「名前を付けて保存→DWG」としてください(画像参照は引き継がれます)。")
+            "置いたまま開いてください(別フォルダに移すと写真が表示されません)。")
 
 tab1, tab2, tab3 = st.tabs(["✅ ベクトル重ね合わせ", "🎨 抽出マスク", "📐 DXFプレビュー"])
 
 DRAW_BGR = {"CRACK_RED": (0, 255, 255), "CRACK_GREEN": (255, 0, 255),
             "CRACK_BLUE": (0, 165, 255), "CRACK_BLACK": (255, 255, 0),
             "CHALK_WHITE": (0, 255, 0)}
+for ck in cc_params:
+    DRAW_BGR[f"CHALK_{ck.upper()}"] = COLOR_CHALK_DEFS[ck]["draw"]
 CAPTION = ("黄=赤 / マゼンタ=緑 / オレンジ=青 / 水色=黒 / 緑=白チョーク "
            "(視認性のため元の色と変えています)")
 
@@ -503,6 +604,8 @@ with tab1:
 with tab2:
     mask_map = {"CRACK_RED": red, "CRACK_GREEN": green, "CRACK_BLUE": blue,
                 "CRACK_BLACK": black, "CHALK_WHITE": chalk}
+    for ck in cc_params:
+        mask_map[f"CHALK_{ck.upper()}"] = cc_masks[ck]
     cols2 = st.columns(2)
     idx = 0
     for name, jp in active:
@@ -513,9 +616,12 @@ with tab2:
         vis[m > 0] = (0, 255, 0)
         if name == "CHALK_WHITE" and chalk_rej is not None and show_rejected:
             vis[chalk_rej > 0] = (0, 0, 255)
+        ck_name = name.replace("CHALK_", "").lower()
+        if ck_name in cc_rejs and show_rejected:
+            vis[cc_rejs[ck_name] > 0] = (0, 0, 255)
         cap = f"{jp} 抽出 (緑)"
-        if name == "CHALK_WHITE" and show_rejected:
-            cap += " / 赤=エフロ等と判定し棄却"
+        if (name == "CHALK_WHITE" or ck_name in cc_rejs) and show_rejected:
+            cap += " / 赤=線幅不規則で棄却"
         cols2[idx % 2].image(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB),
                              caption=cap, use_container_width=True)
         idx += 1
@@ -526,6 +632,8 @@ with tab3:
     DXF_BGR = {"CRACK_RED": (0, 0, 255), "CRACK_GREEN": (0, 160, 0),
                "CRACK_BLUE": (255, 0, 0), "CRACK_BLACK": (0, 0, 0),
                "CHALK_WHITE": (140, 140, 140)}
+    for ck in cc_params:
+        DXF_BGR[f"CHALK_{ck.upper()}"] = COLOR_CHALK_DEFS[ck]["draw"]
     for name, _ in active:
         for pl in px_polys[name]:
             cv2.polylines(canvas, [pl], False, DXF_BGR[name], 2)
