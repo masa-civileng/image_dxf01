@@ -21,6 +21,51 @@ from ezdxf.addons import odafc
 
 st.set_page_config(page_title="ひび割れ写真→DXF変換 v2", layout="wide")
 
+# ======================================================================
+# GA4 アクセス解析（全体の実行回数・再訪ユーザー数の計測）
+# ======================================================================
+import streamlit.components.v1 as components
+
+GA_ID = "G-JGKS7NWTZD"  # ← GA4 測定ID
+
+
+def inject_ga():
+    """GA4 本体を親ドキュメントに1回だけ注入（page_view 自動計測）"""
+    components.html(f"""
+    <script>
+    (function() {{
+      var doc = window.parent.document;
+      if (doc.getElementById('ga-lib')) return;   // 二重注入防止
+      var s = doc.createElement('script');
+      s.id = 'ga-lib'; s.async = true;
+      s.src = 'https://www.googletagmanager.com/gtag/js?id={GA_ID}';
+      doc.head.appendChild(s);
+      var s2 = doc.createElement('script');
+      s2.innerHTML = "window.dataLayer=window.dataLayer||[];"
+        + "function gtag(){{dataLayer.push(arguments);}}"
+        + "gtag('js', new Date());"
+        + "gtag('config','{GA_ID}');";
+      doc.head.appendChild(s2);
+    }})();
+    </script>
+    """, height=0)
+
+
+def track_event(event_name):
+    """任意イベントを GA4 に送信"""
+    components.html(f"""
+    <script>
+    (function() {{
+      var g = window.parent.gtag;
+      if (g) {{ g('event', '{event_name}'); }}
+    }})();
+    </script>
+    """, height=0)
+
+
+inject_ga()
+# ======================================================================
+
 # ----------------------------------------------------------------------
 # 画像処理関数
 # ----------------------------------------------------------------------
@@ -550,6 +595,9 @@ for ck in cc_params:
 cols = st.columns(len(active))
 for c, (name, jp) in zip(cols, active):
     c.metric(jp, f"{stats[name][0]} 本", f"{stats[name][1] / 1000:.2f} m")
+
+# 変換成功（ダウンロード表示到達）を1回の実行としてGA4に記録
+track_event("dxf_conversion")
 
 dl_cols = st.columns(3)
 if embed_photo:
